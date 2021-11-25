@@ -14,11 +14,12 @@ rm(list = ls())
 
 library(pacman)
 # Abrimos las paqueterías con un sólo comando:
-p_load(haven, tidyverse, knitr, foreign,data.table)
+p_load(haven, tidyverse, knitr, foreign,data.table, kableExtra, srvyr)
 
 
 ###Carpeta de trabajo y carga de datos
-setwd ("D:/Encuestas/ENIGH Vieja Construccion")
+#setwd ("D:/Encuestas/ENIGH Vieja Construccion")
+setwd ("/Users/macsernst/Documents/Encuestas/ENIGH Vieja Construccion")
 
 # Prestaciones laborales
 trab <- read_dta("2020/bases/trabajos.dta") %>% rename_all(tolower)
@@ -254,14 +255,251 @@ segsoc <-mutate(segsoc_m,
                   TRUE ~1)) # Presenta carencia
 
 
-segsoc <- select(segsoc, folioviv, foliohog, numren,starts_with("tipo_trab"), 
+segsoc <- select(segsoc, folioviv, foliohog, numren, starts_with("tipo_trab"), 
                  starts_with("aforlab"), starts_with("smlab"), smcv, aforecv, 
                  pea, jub, ss_dir, par, ends_with("_ss"), s_salud,
-                 ic_segsoc)
+                 ic_segsoc,
+                 starts_with("inst_") )
 
 fwrite(segsoc, "2020/bases/mod/ic_segsoc20.csv", row.names=F)
 gdata::keep(segsoc, poblacion, poblacion_mod, sure=T)
 
 
 
+#####tablas
 
+# Concentrado
+concentradohogar <- read_dta("2020/bases/concentradohogar.dta") %>% rename_all(tolower)
+
+datitos20 <- left_join(segsoc, concentradohogar, by = c("folioviv", "foliohog"))
+datitos20 <- left_join(datitos20, poblacion, by = c("folioviv", "foliohog","numren"))
+datitos20 = as.data.frame(datitos20)
+datitos20m <- datitos20 %>%
+  mutate(
+    nueva_rur=    case_when(tam_loc==3 | tam_loc==4 ~ "Menos de 15k",
+                            tam_loc==1 | tam_loc==2 ~ "15k o más"),
+    edad_recoded= case_when(  edad<=18  ~ "Menos de 18",
+                              edad>=19 & edad<=29 ~ "Entre 19 y 29",
+                              edad>=30 & edad<=44 ~ "Entre 30 y 44",
+                              edad>=45 & edad<=59 ~ "Entre 45 y 59",
+                              edad>=60            ~ "Mayor que 60"),
+    habla_ind= case_when(  hablaind==1  ~ 1,
+                           hablaind==2  ~ 0),
+    ing_cor_pc=ing_cor/tot_integ,
+    decil  = dineq::ntiles.wtd(ing_cor_pc, 10, weights = factor),
+    fuente_predo = case_when(  trabajo>negocio  ~ "Más remuneraciones",
+                               trabajo<negocio  ~ "Más negocios"),
+    tam_loc=      factor(tam_loc,
+                            levels = c(1,2,3,4),
+                            labels = c("100k y mas", "15k a 100k", "2.5k a 15k", "Menos de 2.5k")))
+glimpse(datitos20m)         
+table(datitos20m$edad_recoded)
+#Distribución de acceso a salud por tamaño de localidad
+datitos20m %>% 
+  group_by(tam_loc) %>% 
+  summarise( 
+    count  = n(),
+    suma   = sum(inst_Total),
+    mean   = mean(inst_Total),
+    median = median(inst_Total),
+    q25    = quantile(inst_Total, 0.25),
+    q75    = quantile(inst_Total, 0.75),
+  )%>% 
+  kbl() %>% 
+  kable_styling() %>% 
+  kable_classic() 
+
+#SRVYR
+enigh20_design <- datitos20m %>% 
+  as_survey_design(ids = upm, weights = factor, strata = est_dis)
+enigh20_boot <- enigh20_design %>% 
+  as_survey_rep(type = "bootstrap", replicates = 50)
+
+#1. Distribución de acceso a salud por tamaño de localidad completo
+  enigh20_boot %>%
+  #filter (parentesco==101) %>% 
+  group_by(tam_loc) %>% 
+  srvyr::summarise(promedio = survey_mean (inst_Total, na.rm = TRUE)
+  )%>% 
+    kbl() %>% 
+    kable_styling() %>% 
+    kable_classic() 
+
+  enigh20_boot %>%
+    #filter (parentesco==101) %>% 
+    group_by(nueva_rur) %>% 
+    srvyr::summarise(promedio = survey_mean (inst_Total, na.rm = TRUE)
+    )%>% 
+    kbl() %>% 
+    kable_styling() %>% 
+    kable_classic() 
+
+  glimpse(datitos20m)
+  
+  #1. Distribución de acceso a salud por tamaño de localidad completo
+  enigh20_boot %>%
+    #filter (parentesco==101) %>% 
+    group_by(tam_loc) %>% 
+    srvyr::summarise(
+      Total         = survey_mean (inst_Total, na.rm = TRUE),
+      INSABI        = survey_mean (inst_insabi, na.rm = TRUE),
+      IMSS          = survey_mean (inst_IMSS, na.rm = TRUE),
+      ISSSTE        = survey_mean (inst_ISSSTE, na.rm = TRUE),
+      PEMEX_FAM     = survey_mean (inst_PEMEX_FAM, na.rm = TRUE),
+      IMSS_PROSPERA = survey_mean (inst_PROSPERA, na.rm = TRUE),
+      OTRA          = survey_mean (inst_OTRA, na.rm = TRUE),
+    )%>% 
+    kbl() %>% 
+    kable_styling() %>% 
+    kable_classic() 
+  
+  enigh20_boot %>%
+    #filter (parentesco==101) %>% 
+    group_by(nueva_rur) %>% 
+    srvyr::summarise(
+      Total         = survey_mean (inst_Total, na.rm = TRUE),
+      INSABI        = survey_mean (inst_insabi, na.rm = TRUE),
+      IMSS          = survey_mean (inst_IMSS, na.rm = TRUE),
+      ISSSTE        = survey_mean (inst_ISSSTE, na.rm = TRUE),
+      PEMEX_FAM     = survey_mean (inst_PEMEX_FAM, na.rm = TRUE),
+      IMSS_PROSPERA = survey_mean (inst_PROSPERA, na.rm = TRUE),
+      OTRA          = survey_mean (inst_OTRA, na.rm = TRUE), 
+    )%>% 
+    kbl() %>% 
+    kable_styling() %>% 
+    kable_classic() 
+
+#Sexo
+  enigh20_boot %>%
+    #filter (nueva_rur=="Menos de 15k") %>% 
+    group_by(nueva_rur,sexo) %>% 
+    srvyr::summarise(
+      Total         = survey_mean (inst_Total, na.rm = TRUE),
+      INSABI        = survey_mean (inst_insabi, na.rm = TRUE),
+      IMSS          = survey_mean (inst_IMSS, na.rm = TRUE),
+      ISSSTE        = survey_mean (inst_ISSSTE, na.rm = TRUE),
+      PEMEX_FAM     = survey_mean (inst_PEMEX_FAM, na.rm = TRUE),
+      IMSS_PROSPERA = survey_mean (inst_PROSPERA, na.rm = TRUE),
+      OTRA          = survey_mean (inst_OTRA, na.rm = TRUE), 
+    )%>% 
+    kbl() %>% 
+    kable_styling() %>% 
+    kable_classic() 
+  
+#Edad
+  enigh20_boot %>%
+    mutate(
+      edad_recoded= case_when(  edad<=18  ~ "Menos de 18",
+                                edad>=19 & edad<=29 ~ "Entre 19 y 29",
+                                edad>=30 & edad<=44 ~ "Entre 30 y 44",
+                                edad>=45 & edad<=59 ~ "Entre 45 y 59",
+                                edad>=60            ~ "Mayor que 60",
+      )
+    ) %>% 
+    #filter (nueva_rur=="Menos de 15k") %>% 
+    group_by(nueva_rur,edad_recoded) %>% 
+    srvyr::summarise(
+      Total         = survey_mean (inst_Total, na.rm = TRUE),
+      INSABI        = survey_mean (inst_insabi, na.rm = TRUE),
+      IMSS          = survey_mean (inst_IMSS, na.rm = TRUE),
+      ISSSTE        = survey_mean (inst_ISSSTE, na.rm = TRUE),
+      PEMEX_FAM     = survey_mean (inst_PEMEX_FAM, na.rm = TRUE),
+      IMSS_PROSPERA = survey_mean (inst_PROSPERA, na.rm = TRUE),
+      OTRA          = survey_mean (inst_OTRA, na.rm = TRUE), 
+    )%>% 
+    kbl() %>% 
+    kable_styling() %>% 
+    kable_classic() 
+  
+#Habla lengua indígena
+  enigh20_boot %>%
+    mutate(
+      habla_ind= case_when(  hablaind==1  ~ 1,
+                             hablaind==2  ~ 0,
+      )
+    ) %>% 
+    #filter (nueva_rur=="Menos de 15k") %>% 
+    group_by(nueva_rur,habla_ind) %>% 
+    srvyr::summarise(
+      Total         = survey_mean (inst_Total, na.rm = TRUE),
+      INSABI        = survey_mean (inst_insabi, na.rm = TRUE),
+      IMSS          = survey_mean (inst_IMSS, na.rm = TRUE),
+      ISSSTE        = survey_mean (inst_ISSSTE, na.rm = TRUE),
+      PEMEX_FAM     = survey_mean (inst_PEMEX_FAM, na.rm = TRUE),
+      IMSS_PROSPERA = survey_mean (inst_PROSPERA, na.rm = TRUE),
+      OTRA          = survey_mean (inst_OTRA, na.rm = TRUE), 
+    )%>% 
+    kbl() %>% 
+    kable_styling() %>% 
+    kable_classic()    
+     
+    
+  #Deciles de ingreso
+  enigh20_boot %>%
+    mutate(
+      ing_cor_pc=ing_cor/tot_integ,
+      decil  = dineq::ntiles.wtd(ing_cor_pc, 10, weights = factor)
+      ) %>% 
+    #filter (nueva_rur=="Menos de 15k") %>% 
+    group_by(nueva_rur,decil) %>% 
+    srvyr::summarise(
+      Total         = survey_mean (inst_Total, na.rm = TRUE),
+      INSABI        = survey_mean (inst_insabi, na.rm = TRUE),
+      IMSS          = survey_mean (inst_IMSS, na.rm = TRUE),
+      ISSSTE        = survey_mean (inst_ISSSTE, na.rm = TRUE),
+      PEMEX_FAM     = survey_mean (inst_PEMEX_FAM, na.rm = TRUE),
+      IMSS_PROSPERA = survey_mean (inst_PROSPERA, na.rm = TRUE),
+      OTRA          = survey_mean (inst_OTRA, na.rm = TRUE), 
+    )%>% 
+    kbl() %>% 
+    kable_styling() %>% 
+    kable_classic()      
+  
+  
+  
+  #Fuente de ingreso predominante
+  enigh20_boot %>%
+    mutate(
+      fuente_predo = case_when(  trabajo>negocio  ~ "Más remuneraciones",
+                                 trabajo<negocio  ~ "Más negocios",
+      )
+    ) %>%  
+    filter (parentesco==101)  %>% 
+    group_by(nueva_rur,fuente_predo) %>% 
+    srvyr::summarise(
+      Total         = survey_mean (inst_Total, na.rm = TRUE),
+      INSABI        = survey_mean (inst_insabi, na.rm = TRUE),
+      IMSS          = survey_mean (inst_IMSS, na.rm = TRUE),
+      ISSSTE        = survey_mean (inst_ISSSTE, na.rm = TRUE),
+      PEMEX_FAM     = survey_mean (inst_PEMEX_FAM, na.rm = TRUE),
+      IMSS_PROSPERA = survey_mean (inst_PROSPERA, na.rm = TRUE),
+      OTRA          = survey_mean (inst_OTRA, na.rm = TRUE), 
+    )%>% 
+    kbl() %>% 
+    kable_styling() %>% 
+    kable_classic()      
+   
+  
+  
+  #Fuente de ingreso predominante
+  enigh20_boot %>%
+    mutate(
+      fuente_predo = case_when(  trabajo>negocio  ~ "Más remuneraciones",
+                                 trabajo<negocio  ~ "Más negocios",
+      )
+    ) %>%  
+    filter (parentesco==101)  %>% 
+    group_by(nueva_rur,fuente_predo) %>% 
+    srvyr::summarise(
+      Total         = survey_mean (inst_Total, na.rm = TRUE),
+      INSABI        = survey_mean (inst_insabi, na.rm = TRUE),
+      IMSS          = survey_mean (inst_IMSS, na.rm = TRUE),
+      ISSSTE        = survey_mean (inst_ISSSTE, na.rm = TRUE),
+      PEMEX_FAM     = survey_mean (inst_PEMEX_FAM, na.rm = TRUE),
+      IMSS_PROSPERA = survey_mean (inst_PROSPERA, na.rm = TRUE),
+      OTRA          = survey_mean (inst_OTRA, na.rm = TRUE), 
+    )%>% 
+    kbl() %>% 
+    kable_styling() %>% 
+    kable_classic()      
+  
